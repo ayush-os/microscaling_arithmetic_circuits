@@ -274,3 +274,100 @@ verified concrete numbers — not left as "basically what MX does."
   requantization — not started) written up as one coherent pipeline spec,
   bit widths and latency/area tradeoffs stated with one chosen, ready to
   hand to Phase 2 for actual RTL.
+
+---
+
+## 7. Phase 1 working notes — requantization, the two real decisions
+
+Process log for closing out the two open threads from §6. Final writeup
+lives in `phase1_pipeline_spec.md`; this section is the reasoning trail.
+
+### 7.1 The requantization formula
+
+Mirrors OCP MX's own quantize direction (Algorithm 1 gave
+`shared_exp ← ⌊log2(max)⌋ − emax_elem`, `X ← 2^shared_exp`, for decode;
+the quantize side reapplies the same `X`):
+
+```
+shared_exp = E − 127                          # unbias E8M0 (E from Stage 2)
+P_i = Q_E4M3(V_i × 2^(−shared_exp))           for i = 0..31
+```
+
+Real detail worth keeping: since `X` is always a power of two, `V_i / X`
+is a pure signed bit-shift, never a real divider — right-shift when
+`shared_exp > 0`, left-shift when `shared_exp < 0` (verified range
+roughly [−8, +10], genuinely bidirectional, not just a right-shift).
+`Q_E4M3(·)` is where rounding actually happens — a per-element LZC
+re-normalizes the shifted magnitude, keeping the top 3 bits as mantissa.
+`V_i` is signed (`SInt(20.W)`), so sign strips off before the
+shift/mantissa-extraction and reattaches after.
+
+### 7.2 Serial vs. parallel shifter — decided: parallel
+
+Initial instinct was "parallel is just 32x the area, obviously" — true
+as a first-order number for the shifter datapath itself, but two
+refinements mattered:
+
+- **Latency, not area, is what actually forces the decision.** HW2's
+  own model budgets exactly 1 cycle for "scale/shift/round" inside the
+  6-cycle total epilogue latency that makes k=32 the largest block size
+  that doesn't stall the fixed 6-cycle compute pipeline (§1, Part C.a).
+  Serial's 32 cycles would blow that to ~37, breaking the very
+  crossover finding this project's k=32 choice rests on. So parallel
+  isn't "chosen for being faster" — it's close to mandatory given a
+  constraint already established in Phase 0.
+- **The area ratio isn't a clean 32x either direction.** The
+  shift-amount decode is one shared value (`shared_exp`, one per
+  block) broadcast to all 32 data paths — true under *either*
+  architecture, since serial also only decodes it once and reuses the
+  same select lines across 32 cycles. Not a parallel-specific saving,
+  a wash. What *does* differ: serial must add control parallel never
+  needs at all — a 32:1 input mux, a cycle counter/sequencer, and
+  output demux/routing, purely to time-multiplex one physical shifter.
+  Parallel needs none of that, not because it "amortizes control
+  better," but because there's nothing to schedule in the first place.
+  Net effect: serial's true cost is understated by "just 1 shifter."
+
+**Decided: parallel** (32 shifters, 1 cycle), on the latency constraint
+primarily, with the area cost stated honestly (~32x shifter datapath,
+partially offset by serial's own control tax) rather than assumed away.
+
+### 7.3 Rounding mode — decided: round-to-nearest-even
+
+Not a close call, low deliberation needed:
+
+- Truncation is a biased estimator (always toward zero) — compounds
+  directionally across every block/layer, the accuracy-drift failure
+  mode a quantized pipeline can't afford.
+- RNE is the default in every real format read during Phase 0 (NVIDIA
+  FP8/E4M3, bfloat16, MX itself) — established convention, not an
+  outlier pick.
+- Hardware cost is small and doesn't change the decision: guard bit +
+  sticky-OR + tie-break-driven +1 increment, a handful of gates next to
+  the barrel shifter/LZC already in the design.
+
+(Note: `notes.md`'s own §6 flagged "reuse whatever reading #5's
+rounding-mode discussion says" — that source was never identified/
+available this session, unlike #1/#7 which were pinned down in §0. The
+reasoning above stands independently of it; flagged rather than
+silently assumed resolved, in case #5 surfaces later with a different
+angle.)
+
+### 7.4 Accumulator-precision check — restated as its own explicit item
+
+Per Phase 1's own requirement (state it explicitly, don't just inherit
+it from §3): worst-case accumulator magnitude `16×128×128=262,144=2^18`
+fits comfortably inside the 20-bit signed range (`2^19−1=524,287`, 19 of
+20 bits used at the ceiling), and Stage 2's own verified output range
+([119,137], a real spread) confirms this isn't degenerate downstream.
+Sufficient by construction (N=16 chosen for exactly this), not luck —
+full statement in `phase1_pipeline_spec.md`.
+
+### 7.5 Phase 1 checkpoint — met
+
+All three stages (max-finding cited, exponent extraction slotted in,
+requantization now fully designed: formula + parallel-shifter decision
++ RNE decision) plus the explicit accumulator check are written up
+together in `phase1_pipeline_spec.md`, with real bit widths and real
+latency/area tradeoffs stated and one chosen throughout — ready to
+become Phase 2's RTL.
