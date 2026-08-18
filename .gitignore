@@ -1,0 +1,24 @@
+# Chisel/sbt build artifacts
+chisel/target/
+chisel/project/target/
+chisel/project/project/
+chisel/generated/
+
+# OpenLane 2 (cloned tool, not project source) + its Python env
+physical/openlane2/
+physical/venv/
+
+# OpenLane run outputs — regeneratable, large (PDK-scale GDS/def/db per run)
+physical/designs/*/runs/
+
+# Per-run console logs — evidence already distilled into ARCHITECTURE.md's
+# real numbers; keep locally for reference, don't commit
+physical/designs/*/*.log
+
+# Verilog copied in as OpenLane's synthesis input — regenerated from
+# chisel/generated/ (itself gitignored above), not project source
+physical/designs/*/src/
+
+# scratch/editor backups
+*.bak
+*.bak[0-9]

@@ -1,0 +1,39 @@
+# spec-physical.md Phase 2/3.
+#
+# CLOCK_PERIOD: starting at 2ns (500MHz) — deliberately generous for the
+# first full-flow pass; Phase 3 sweeps this downward for the real Fmax.
+#
+# FP_CORE_UTIL: first attempt at 45% (OpenLane's sky130 default, matching
+# this project's own 40-50% guidance) hit a real, expected-per-spec first-
+# PnR-attempt floorplan issue: 906 flat IO pins (32x20 in + clock/reset +
+# 8 e + 32x8 p) is a lot for a design this small, and 45% util made too
+# tight a perimeter to place them all (OpenROAD PPL-0024: needed 3080.4um
+# of perimeter, had 2660.8um). Dropped to 30% so the die grows enough —
+# gate-density utilization was never the binding constraint here, IO pin
+# count was.
+#
+# CLOCK_PERIOD: 2ns's first full-flow attempt closed floorplan/place/route
+# but failed final signoff — real post-PnR STA showed setup WNS -7.05ns
+# (real critical path, the unregistered ExponentExtract->Requantize
+# combinational chain, is ~9ns, not the ~2ns Phase 2 generously guessed)
+# and a small hold WNS -0.15ns (plausibly because 2ns gave the automatic
+# hold-fixing step no setup slack to safely add hold buffers into).
+# Raised to 12ns, comfortably above the observed real critical path, to
+# get one clean signoff run before sweeping back down for real Fmax.
+DESIGN_NAME: Epilogue
+VERILOG_FILES: dir::src/*.v
+CLOCK_PERIOD: 30.0
+CLOCK_PORT: clock
+FP_CORE_UTIL: 30
+PL_TARGET_DENSITY: 0.5
+
+pdk::sky130*:
+  scl::sky130_fd_sc_hd: {}
+
+# Widened after discovering OpenLane's default signoff gate only checks
+# the *tt* (typical) corner — a real chip needs to close timing across
+# the full PVT range, especially the worst-case slow/hot/low-voltage
+# corner (ss_100C_1v60), which was violating by ~7.6ns at a period that
+# closed cleanly under the tt-only default.
+TIMING_VIOLATION_CORNERS:
+  - "*"

@@ -1,0 +1,6 @@
+DESIGN_NAME: MaxFinder
+VERILOG_FILES: dir::src/*.v
+CLOCK_PERIOD: 2.0
+CLOCK_PORT: clock
+pdk::sky130*:
+  scl::sky130_fd_sc_hd: {}

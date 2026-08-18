@@ -1,0 +1,4 @@
+DESIGN_NAME: ExponentExtract
+VERILOG_FILES: dir::src/*.v
+pdk::sky130*:
+  scl::sky130_fd_sc_hd: {}
