@@ -1,0 +1,55 @@
+# The fully-merged variant (see ARCHITECTURE.md's "Design space beyond
+# the 6-cycle constraint"): MaxFinder's RegNext tree and the top-level
+# ShiftRegister(io.v, 5) are gone, so this Verilog has zero registers
+# anywhere (confirmed: no `always` blocks at all in the emitted netlist).
+#
+# CLOCK_PORT/CLOCK_PERIOD are still declared even though nothing in this
+# design is clocked — Epilogue.scala kept `extends Module` (not
+# RawModule) specifically so this config could keep doing that: with a
+# clock declared but never driving any register, every path in the design
+# is a pure primary-input-to-primary-output combinational path, and
+# OpenLane's standard SDC gives those paths input/output delay budgets
+# against the declared period exactly the way it already did for the
+# ExponentExtract->Requantize chain in the original composed design. WNS
+# at a given period backs out the real worst-case propagation delay
+# (period - WNS) without needing a bespoke clockless SDC. There is
+# nothing to close a periodic *loop* against (no register feeds back into
+# itself), so "Fmax" here doesn't mean "fastest safe clock for repeated
+# reuse of registers" the way it did for the old 6-cycle design — it
+# means "how long until a fresh output is valid after a fresh input
+# arrives," a one-shot propagation delay, not a throughput figure. Picked
+# a generous period up front (50ns, safely above the ~30ns all-corner
+# figure the old Stage2+3-only chain needed) since the point is a real,
+# reasonably-tight bound on that delay, not a from-scratch Fmax
+# sweep/bisection — deliberately not chasing a fully-optimized number,
+# same discipline this project applies elsewhere.
+# FP_CORE_UTIL: same 906-flat-IO-pin gotcha as the original composed
+# design (32x20 in + clock/reset + 8 e + 32x8 p never changed — only the
+# internal cell count did), but with a real twist: this design's real
+# placed-instance area (85,290.55 um^2, from the Yosys.Synthesis-only
+# pass) is ~45% of the original composed design's (189,424.2 um^2,
+# because global synthesis found real cross-stage sharing the per-stage
+# standalone runs couldn't — see ARCHITECTURE.md). The same 906 pins need
+# the same ~3080.4um die perimeter regardless of internal cell count, so
+# the *same* FP_CORE_UTIL: 30 that worked for the original design (whose
+# die grew large enough on cell area alone) is no longer generous enough
+# here — first attempt at 30 errored needing 3080.40um, had 2198.40um.
+# Backed out algebraically from the reported die/perimeter numbers
+# (perimeter needs to grow by ~1.40x -> area by ~1.96x -> util needs to
+# shrink by ~1.96x from 30% -> ~15.3%) rather than blindly re-bisecting;
+# picked 12% for margin above that computed floor.
+DESIGN_NAME: Epilogue
+VERILOG_FILES: dir::src/*.v
+CLOCK_PERIOD: 50.0
+CLOCK_PORT: clock
+FP_CORE_UTIL: 12
+PL_TARGET_DENSITY: 0.5
+
+pdk::sky130*:
+  scl::sky130_fd_sc_hd: {}
+
+# Same all-PVT-corner signoff discipline as the original composed design
+# (physical/designs/epilogue/config.yaml) — OpenLane's default only gates
+# the typical corner, which understates real worst-case delay.
+TIMING_VIOLATION_CORNERS:
+  - "*"

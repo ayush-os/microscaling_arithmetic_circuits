@@ -27,9 +27,8 @@ class EpilogueSpec extends AnyFreeSpec with ChiselSim with Matchers {
     // formula (not Epilogue's own ExponentExtract instance), and P_i from
     // a standalone Requantize driven directly with that golden E — not
     // Epilogue's internal wiring. This isolates whether Epilogue's
-    // *composition* of already-individually-verified stages (in
-    // particular the ShiftRegister latency alignment) is correct, rather
-    // than re-checking each stage's algorithm a second time.
+    // *composition* of already-individually-verified stages is correct,
+    // rather than re-checking each stage's algorithm a second time.
     var expected: Seq[(BigInt, Seq[BigInt])] = Seq.empty
     simulate(new Requantize) { requantDut =>
       expected = trials.map { vs =>
@@ -44,28 +43,26 @@ class EpilogueSpec extends AnyFreeSpec with ChiselSim with Matchers {
     simulate(new Epilogue) { epilogueDut =>
       trials.zip(expected).foreach { case (vs, (e, ps)) =>
         vs.zipWithIndex.foreach { case (v, i) => epilogueDut.io.v(i).poke(v.S(20.W)) }
-        epilogueDut.clock.step(5)
         epilogueDut.io.e.expect(e.U(8.W))
         ps.zipWithIndex.foreach { case (p, i) => epilogueDut.io.p(i).expect(p.U(8.W)) }
       }
     }
   }
 
-  // Streaming variant of the test above, not just held-constant blocks:
-  // one distinct block fed per cycle, back-to-back, checked against the
-  // pipeline's real 5-cycle delay as it drains. The held-constant version
-  // can't tell a genuinely-pipelined MaxFinder from a combinational one
-  // that just happens to still be showing the right answer 5 cycles
-  // later — inputs never changed in between, so a stale/misaligned `v`
-  // reaching Requantize would go unnoticed. This is the composition-level
-  // check for exactly the bug found via real synthesis:
-  // `Requantize.io.v := ShiftRegister(io.v, 5)` only stays correctly
-  // aligned with `e` if Stage 1 actually takes 5 cycles to produce `e` —
-  // with distinct blocks streaming through, a combinational MaxFinder (or
-  // any latency/alignment mismatch) would pair the wrong block's `v` with
-  // `e`, which this test would catch and the held-constant one
-  // structurally cannot.
-  "Epilogue should correctly pipeline distinct, back-to-back streaming blocks" in {
+  // Now purely combinational (see ARCHITECTURE.md's "Design space beyond
+  // the 6-cycle constraint") — the old streaming test existed specifically
+  // to distinguish a genuinely-5-cycle-pipelined MaxFinder from one that
+  // settles fast, by checking that `e`/`p` track the block that entered 5
+  // cycles ago, not the block currently on `io.v`. With no pipeline left
+  // to distinguish, that test's premise (and the `ShiftRegister`
+  // alignment bug it was designed to catch) no longer applies. This
+  // replaces it with the composition-level check that does still matter
+  // for a combinational design: back-to-back distinct blocks, poked one
+  // per cycle with no settling time given, each immediately producing the
+  // *same* cycle's correct output — i.e. `io.v` and `io.e`/`io.p` never
+  // drift out of alignment, because there's no latency for them to drift
+  // across.
+  "Epilogue should correctly handle back-to-back distinct blocks with no settling time" in {
     val rnd = new Random(11)
     val numBlocks = 8
     val blocks = Seq.fill(numBlocks)(Seq.fill(32)(BigInt(20, rnd) - (BigInt(1) << 19)))
@@ -82,17 +79,11 @@ class EpilogueSpec extends AnyFreeSpec with ChiselSim with Matchers {
     }
 
     simulate(new Epilogue) { dut =>
-      for (i <- 0 until numBlocks + 5) {
-        if (i < numBlocks) {
-          blocks(i).zipWithIndex.foreach { case (v, j) => dut.io.v(j).poke(v.S(20.W)) }
-        }
-        dut.clock.step(1)
-        val blockIdx = (i + 1) - 5
-        if (blockIdx >= 0 && blockIdx < numBlocks) {
-          val (e, ps) = expected(blockIdx)
-          dut.io.e.expect(e.U(8.W))
-          ps.zipWithIndex.foreach { case (p, j) => dut.io.p(j).expect(p.U(8.W)) }
-        }
+      blocks.zip(expected).foreach { case (vs, (e, ps)) =>
+        vs.zipWithIndex.foreach { case (v, j) => dut.io.v(j).poke(v.S(20.W)) }
+        dut.io.e.expect(e.U(8.W))
+        ps.zipWithIndex.foreach { case (p, j) => dut.io.p(j).expect(p.U(8.W)) }
+        dut.clock.step(1) // advance to the next block; no pipeline drain to wait on
       }
     }
   }
